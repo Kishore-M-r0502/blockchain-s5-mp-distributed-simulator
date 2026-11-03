@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Distributed Blockchain Network Simulator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <h1>Blockchain network simulator</h1>
+    <span class="sub">deterministic &middot; seed <b id="h-seed">-</b></span>
+  </div>
+  <div class="clock" title="Simulation time. It only advances while the simulation runs and is independent of your computer's clock.">
+    <span class="label">simulated time</span><b id="h-time">0.000 s</b>
+  </div>
+  <div class="clock" title="Hash of the entire simulation state. Two runs with the same seed and the same actions always show the same digest.">
+    <span class="label">state digest</span><b id="h-digest" class="mono">-</b>
+  </div>
+  <div class="topctl">
+    <button id="btn-pause" class="primary">Pause</button>
+    <label>Speed
+      <select id="sel-speed">
+        <option value="0.5">0.5x</option><option value="1">1x</option><option value="2" selected>2x</option>
+        <option value="5">5x</option><option value="10">10x</option><option value="25">25x</option>
+      </select>
+    </label>
+    <label>Seed <input id="in-seed" type="number" min="0" value="42" class="narrow"></label>
+    <button id="btn-reset" class="danger">Reset</button>
+    <a id="btn-pdf" class="btn" href="/api/report.pdf">PDF report</a>
+    <span id="conn" class="conn off" title="Socket.IO connection">offline</span>
+  </div>
+</header>
+
+<section id="overview" class="cards" aria-label="Network overview"></section>
+
+<main class="layout">
+  <section class="panel viz">
+    <div class="panel-head">
+      <h2>Network</h2>
+      <div class="scenario-bar">
+        <select id="sel-scenario" aria-label="Scenario"></select>
+        <button id="btn-scenario" class="primary">Run scenario</button>
+      </div>
+    </div>
+    <div id="scenario-box" class="scenario-box hidden"></div>
+    <div id="graph" class="graph"><svg id="svg" role="img" aria-label="Live network graph"></svg>
+      <div id="tooltip" class="tooltip hidden"></div>
+      <div class="legend" id="legend"></div>
+    </div>
+  </section>
+
+  <aside class="side">
+    <section class="panel" id="inspector">
+      <div class="panel-head"><h2>Node inspector</h2></div>
+      <div id="inspector-body" class="muted">Click a node in the graph.</div>
+    </section>
+
+    <section class="panel controls">
+      <div class="panel-head"><h2>Controls</h2></div>
+
+      <details open><summary>Network</summary>
+        <div class="row">
+          <button id="c-add">Add node</button>
+          <button id="c-remove" class="danger">Remove selected</button>
+          <button id="c-toggle">Take selected offline</button>
+        </div>
+        <div class="row">
+          <select id="c-peer-a" aria-label="First node"></select>
+          <select id="c-peer-b" aria-label="Second node"></select>
+          <button id="c-connect">Connect</button>
+          <button id="c-disconnect">Disconnect</button>
+        </div>
+        <div class="row">
+          <button id="c-partition">Split network in two</button>
+          <button id="c-heal">Heal network</button>
+        </div>
+        <div class="row">
+          <label>Latency <input id="c-latency" type="number" min="1" max="60000" value="400" class="narrow"> ms</label>
+          <label>Jitter <input id="c-jitter" type="number" min="0" max="60000" value="100" class="narrow"> ms</label>
+          <button id="c-set-latency">Apply</button>
+        </div>
+      </details>
+
+      <details open><summary>Mining</summary>
+        <div class="row">
+          <button id="m-start" class="primary">Start mining</button>
+          <button id="m-stop">Stop mining</button>
+          <button id="m-one">Mine one block</button>
+        </div>
+        <div class="row">
+          <label><input type="checkbox" id="m-all"> apply to all nodes</label>
+          <label>Difficulty <input id="m-diff" type="number" min="1" max="22" value="10" class="narrow"> bits</label>
+          <button id="m-set-diff">Apply</button>
+        </div>
+        <p class="hint" id="m-hint"></p>
+      </details>
+
+      <details open><summary>Transaction</summary>
+        <div class="row">
+          <select id="t-sender" aria-label="Sender"></select>
+          <span class="arrow">pays</span>
+          <select id="t-receiver" aria-label="Receiver"></select>
+          <input id="t-amount" type="number" min="1" value="10" class="narrow" aria-label="Amount">
+        </div>
+        <div class="row">
+          <label>via <select id="t-node"></select></label>
+          <label>nonce <input id="t-nonce" type="number" min="0" class="narrow" placeholder="auto"></label>
+          <button id="t-send" class="primary">Send transaction</button>
+        </div>
+        <p class="hint">Set the same nonce twice to attempt a double spend.</p>
+      </details>
+
+      <details><summary>Misbehaviour &amp; storage</summary>
+        <div class="row">
+          <select id="x-kind" aria-label="Invalid block kind"></select>
+          <button id="x-inject" class="danger">Selected node sends invalid block</button>
+        </div>
+        <p class="hint" id="x-desc"></p>
+        <div class="row">
+          <input id="s-name" value="session1" class="wide" aria-label="Save name">
+          <button id="s-save">Save</button><button id="s-load">Load</button>
+        </div>
+      </details>
+    </section>
+  </aside>
+</main>
+
+<section class="panel tabs-panel">
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="explorer">Blockchain explorer</button>
+    <button class="tab" data-tab="forks">Forks</button>
+    <button class="tab" data-tab="txs">Transactions</button>
+    <button class="tab" data-tab="mining">Mining monitor</button>
+    <button class="tab" data-tab="events">Event log</button>
+    <button class="tab" data-tab="about">Consensus notes</button>
+  </nav>
+
+  <div class="tabpane" id="tab-explorer">
+    <div class="row">
+      <label>Node <select id="e-node"></select></label>
+      <button id="e-validate">Verify whole chain</button>
+      <span id="e-validation" class="pill"></span>
+      <label>Tamper with block # <input id="e-tamper-idx" type="number" min="1" value="1" class="narrow"></label>
+      <button id="e-tamper" class="danger">Corrupt this node's copy</button>
+    </div>
+    <div class="explorer">
+      <div id="chain-strip" class="chain-strip"></div>
+      <div id="block-detail" class="block-detail muted">Select a block to inspect it.</div>
+    </div>
+  </div>
+
+  <div class="tabpane hidden" id="tab-forks">
+    <p class="hint">Every block any node knows about. Filled circles are on the best chain of at least one node; each node's tip is listed under its block. Several leaves means the network currently disagrees.</p>
+    <div id="fork-view" class="fork-view"></div>
+  </div>
+
+  <div class="tabpane hidden" id="tab-txs">
+    <div id="accounts" class="accounts"></div>
+    <div class="tx-grid">
+      <div><h3>Pending</h3><div id="tx-pending"></div></div>
+      <div><h3>Confirmed</h3><div id="tx-confirmed"></div></div>
+      <div><h3>Rejected</h3><div id="tx-rejected"></div></div>
+    </div>
+  </div>
+
+  <div class="tabpane hidden" id="tab-mining"><div id="mining-table"></div></div>
+
+  <div class="tabpane hidden" id="tab-events">
+    <div class="row"><label>Show <select id="ev-filter"></select></label><button id="ev-clear">Clear view</button></div>
+    <ol id="event-log" class="event-log"></ol>
+  </div>
+
+  <div class="tabpane hidden" id="tab-about"><div id="consensus-notes"></div></div>
+</section>
+
+<div id="toast" class="toast hidden" role="status"></div>
+
+<script>
+  // Prefer a local copy in static/vendor (works offline); fall back to CDNs.
+  function loadScript(local, cdn, done) {
+    var s = document.createElement('script'); s.src = local;
+    s.onload = done;
+    s.onerror = function () { var c = document.createElement('script'); c.src = cdn; c.onload = done; document.head.appendChild(c); };
+    document.head.appendChild(s);
+  }
+  var base = "{{ url_for('static', filename='vendor/') }}";
+  loadScript(base + 'd3.min.js', 'https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js', function () {
+    loadScript(base + 'socket.io.min.js', 'https://cdn.socket.io/4.7.5/socket.io.min.js', function () {
+      var files = ['events', 'blockchain', 'dashboard', 'network', 'app'];
+      (function next() {
+        var f = files.shift(); if (!f) return;
+        var s = document.createElement('script'); s.src = "{{ url_for('static', filename='js/') }}" + f + '.js';
+        s.onload = next; document.body.appendChild(s);
+      })();
+    });
+  });
+</script>
+</body>
+</html>
